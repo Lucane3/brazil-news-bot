@@ -28,3 +28,13 @@ jobs:
         env:
           QQ_MAIL_AUTH_CODE: ${{ secrets.QQ_MAIL_AUTH_CODE }}
         run: python main.py
+
+      - name: 部署到 GitHub Pages（国内可访问）
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./_pages
+          publish_branch: gh-pages
+          keep_files: false
+          force_orphan: true
+          commit_message: "deploy: 巴西资讯日报更新"
