@@ -191,7 +191,8 @@ def build_html(articles, bj_now):
 </td></tr>
 
 <tr><td style="padding:20px 24px;background:#eaf7ed;font-size:13px;color:#336;">
-  当日共采集 {total} 条资讯，覆盖 {src_count} 个信息源 &nbsp;|&nbsp; 生成时间 {date_full}（北京时间）
+  当日共采集 {total} 条资讯，覆盖 {src_count} 个信息源 &nbsp;|&nbsp; 生成时间 {date_full}（北京时间）<br>
+  🌐 <a href="https://lucane3.github.io/brazil-news-bot/" style="color:#009739;font-weight:bold;">国内直连查看完整日报 →</a>
 </td></tr>
 
 <tr><td style="padding:4px 0;">
@@ -206,6 +207,99 @@ def build_html(articles, bj_now):
 </table>
 </td></tr></table>
 </body></html>"""
+
+# ===== GitHub Pages 国内可访问页面 =====
+
+def build_github_page(articles, bj_now):
+    """生成完整的HTML页面用于GitHub Pages（国内可直连访问）"""
+    date_str = bj_now.strftime("%Y年%m月%d日")
+    date_full = bj_now.strftime("%Y-%m-%d %H:%M")
+    src_count = len(set(a["source"] for a in articles))
+    total = len(articles)
+    
+    # Group by category
+    cats = {}
+    for a in articles:
+        cat = a.get("category", "综合")
+        cats.setdefault(cat, []).append(a)
+    
+    items_html = ""
+    for cat, items in cats.items():
+        items_html += f'<div class="category"><h2 class="cat-title">📌 {cat}</h2>'
+        for i, item in enumerate(items, 1):
+            display_title = item.get("title_zh") or item["title"]
+            display_summary = item.get("summary_zh") or item.get("summary", "")
+            url = item.get("url", "#")
+            source = item.get("source", "")
+            time_str = item.get("time", "")
+            
+            items_html += f'''
+            <div class="article">
+                <div class="article-number">{i}</div>
+                <div class="article-content">
+                    <h3>{display_title}</h3>
+                    <div class="meta">📡 {source} &nbsp;|&nbsp; 🕐 {time_str}</div>
+                    <p class="summary">{display_summary}</p>
+                    <a href="{url}" target="_blank" class="btn">📖 查看原文 →</a>
+                </div>
+            </div>'''
+            if i < len(items):
+                items_html += '<hr class="divider">'
+        items_html += '</div>'
+    
+    return f'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>巴西资讯日报 | {date_str}</title>
+<style>
+* {{ margin:0; padding:0; box-sizing:border-box; }}
+body {{ font-family:'Microsoft YaHei','PingFang SC',sans-serif; background:#f0f4f0; color:#333; line-height:1.8; }}
+.header {{ background:linear-gradient(135deg,#009739,#00b44a); color:#fff; text-align:center; padding:40px 20px; }}
+.header h1 {{ font-size:32px; letter-spacing:3px; }}
+.header .sub {{ font-size:14px; color:#d4f5db; margin-top:6px; }}
+.header .date {{ font-size:18px; color:#fff; margin-top:10px; }}
+.stats {{ background:#eaf7ed; text-align:center; padding:14px; font-size:14px; color:#336; }}
+.container {{ max-width:800px; margin:0 auto; padding:20px; }}
+.category {{ margin-bottom:30px; }}
+.cat-title {{ background:#009739; color:#fff; padding:10px 20px; font-size:16px; border-radius:4px; display:inline-block; margin-bottom:16px; }}
+.article {{ display:flex; gap:16px; padding:16px; background:#fff; border-radius:6px; margin-bottom:12px; box-shadow:0 1px 4px rgba(0,0,0,0.06); }}
+.article-number {{ flex-shrink:0; width:32px; height:32px; background:#009739; color:#fff; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:bold; font-size:14px; }}
+.article-content {{ flex:1; }}
+.article-content h3 {{ font-size:17px; color:#1a3a1a; margin-bottom:4px; }}
+.meta {{ font-size:12px; color:#888; margin-bottom:8px; }}
+.summary {{ font-size:14px; color:#444; margin-bottom:10px; text-indent:2em; }}
+.btn {{ display:inline-block; padding:6px 18px; background:#009739; color:#fff; text-decoration:none; border-radius:4px; font-size:13px; font-weight:bold; }}
+.btn:hover {{ background:#007a2e; }}
+.divider {{ border:none; border-top:1px dashed #ddd; margin:4px 0 12px 48px; }}
+.footer {{ text-align:center; padding:30px; font-size:12px; color:#aaa; border-top:1px solid #e8e8e8; margin-top:20px; }}
+.footer a {{ color:#009739; }}
+@media (max-width:600px) {{
+    .container {{ padding:10px; }}
+    .header h1 {{ font-size:24px; }}
+    .article {{ flex-direction:column; gap:8px; }}
+}}
+</style>
+</head>
+<body>
+<div class="header">
+    <div class="sub">每日巴西财经简报</div>
+    <h1>巴西资讯日报</h1>
+    <div class="date">{date_str}</div>
+</div>
+<div class="stats">
+    当日共采集 {total} 条资讯，覆盖 {src_count} 个信息源 &nbsp;|&nbsp; 生成时间 {date_full}（北京时间）
+</div>
+<div class="container">
+{items_html}
+</div>
+<div class="footer">
+    <p>巴西资讯日报 · 自动生成 | 信息源：Google News / BCB巴西央行 / IBGE统计局 / 新华网 / 南美侨报网 / 巴西联邦税务局</p>
+    <p>数据来源链接均来自海外媒体，部分可能需要科学上网访问</p>
+</div>
+</body>
+</html>'''
 
 # ===== Word文档生成器（适合微信公众号发布） =====
 
@@ -1230,6 +1324,16 @@ def main():
     
     # Build HTML body
     html = build_html(deduped, bj_now)
+    
+    # Build GitHub Pages page (国内可访问)
+    print("[PAGES] Building GitHub Pages HTML...")
+    pages_html = build_github_page(deduped, bj_now)
+    pages_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_pages")
+    os.makedirs(pages_dir, exist_ok=True)
+    pages_path = os.path.join(pages_dir, "index.html")
+    with open(pages_path, "w", encoding="utf-8") as f:
+        f.write(pages_html)
+    print(f"[PAGES] Saved -> {pages_path}")
     
     # Build Word document
     print("[DOCX] Generating Word attachment...")
