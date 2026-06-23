@@ -2,8 +2,8 @@ name: 🇧🇷 巴西资讯日报
 
 on:
   schedule:
-    # 北京时间每天 14:05（UTC 6:05）
-    - cron: "5 6 * * *"
+    # 北京时间每天早上 7:30（UTC 23:30）
+    - cron: "30 23 * * *"
   # 支持手动触发测试
   workflow_dispatch:
 
