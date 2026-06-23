@@ -7,6 +7,11 @@ on:
   # 支持手动触发测试
   workflow_dispatch:
 
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
 jobs:
   brazil-news:
     runs-on: ubuntu-latest
@@ -32,7 +37,7 @@ jobs:
       - name: 部署到 GitHub Pages（国内可访问）
         uses: peaceiris/actions-gh-pages@v4
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          personal_token: ${{ secrets.GH_PAT }}
           publish_dir: ./_pages
           publish_branch: gh-pages
           keep_files: false
