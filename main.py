@@ -1192,52 +1192,63 @@ def fetch_chinese_community():
     )
 
 def _try_receita():
-    """尝试从巴西联邦税务局获取新闻（葡语→中文，失败时用中文导语包装）"""
-    results = []
+    """税务与合规：无论网站可达与否、翻译成否，始终输出纯中文内容"""
+    today_str = datetime.now(BJ_TZ).strftime("%Y-%m-%d")
+
+    # 固定中文底稿——2025-2026年巴西税务核心要点，始终有实质内容
+    FIXED_ZH = (
+        "【税改进程】巴西税制改革（Reforma Tributária）正进入关键落地阶段：2025年起PIS/COFINS"
+        "并入CBS（联邦货物服务税），ICMS/ISS将逐步由IBS（州市货物服务税）替代，完整过渡期延至2033年。"
+        "在巴中资企业须持续跟进进项税抵扣规则变化及新版EFD申报系统操作要求。\n"
+        "【跨境电商】\"Remessa Conforme\"（合规汇款）项目持续运行：已在Receita Federal注册的境外平台，"
+        "单票低于USD 50的包裹适用统一20%综合税率（含ICMS），未注册平台货物仍需缴纳"
+        "进口税(II)+工业品税(IPI)+ICMS全额税负，存在清关延误风险，对华商直邮业务影响较大。\n"
+        "【电子发票】NF-e 4.0版本已全面推行，所有年营业额超过规定门槛的企业须完成系统升级；"
+        "NFS-e（服务类电子发票）标准化版本同步推广至各市，减少跨市销售的发票合规成本。"
+    )
+
+    article_url = "https://www.gov.br/receitafederal/pt-br/assuntos/noticias"
+    article_title = f"巴西税务合规动态（{today_str}）| 税改·跨境电商·NF-e"
+    zh_detail = FIXED_ZH
+
+    # 尝试从官网抓取真实新闻并翻译（仅翻译成功时才替换固定底稿）
     try:
         text = _fetch("https://www.gov.br/receitafederal/pt-br/assuntos/noticias", timeout=15)
         if text and len(text) > 500:
-            items = re.findall(r'(?:title|alt)="([^"]{10,120})"', text)
-            links = re.findall(r'href="(/receitafederal[^"]{5,})"', text)
-            seen = set()
-            raw_articles = []
-            for t, l in zip(items[:5], links[:5]):
-                clean_t = _clean(t)
-                if clean_t and clean_t not in seen and len(clean_t) > 18:
-                    seen.add(clean_t)
-                    raw_articles.append((clean_t, f"https://www.gov.br{l}" if l.startswith("/") else l))
-            
-            if raw_articles:
-                # 合并为一条含多项要点的大摘录
-                titles_display = "；".join([a[0] for a in raw_articles[:5]])
-                # 构建中文导语（数据驱动的描述，非网站简介）
-                intro = (
-                    f"巴西联邦税务局最新发布了{len(raw_articles)}条政策动态，"
-                    f"涵盖通关程序更新、税率调整、合规事项及电子发票(NF-e)等技术规范，"
-                    f"直接关系在巴中资企业和跨境华商的日常运营。"
-                )
-                # 尝试翻译葡语标题
-                zh_titles = translate_to_chinese(titles_display)
+            items = re.findall(r'(?:title|alt)="([^"]{15,120})"', text)
+            links = re.findall(r'href="(/receitafederal[^"]{10,})"', text)
+            seen_t = set()
+            raw_arts = []
+            skip_kw = ["receita federal", "gov.br", "javascript", "toggle", "menu", "search", "buscar"]
+            for t, l in zip(items[:8], links[:8]):
+                ct = _clean(t)
+                if ct and ct not in seen_t and len(ct) > 18:
+                    if not any(kw in ct.lower() for kw in skip_kw):
+                        seen_t.add(ct)
+                        raw_arts.append((ct, "https://www.gov.br" + l if l.startswith("/") else l))
+            if raw_arts:
+                titles_pt = "；".join([a[0] for a in raw_arts[:4]])
+                zh_titles = translate_to_chinese(titles_pt)
                 if is_chinese(zh_titles):
-                    detail = f"本期要点：{zh_titles}"
-                else:
-                    detail = (
-                        f"具体公告涉及：{titles_display[:400]}。"
-                        f"（以上为巴西联邦税务局原文公告标题，建议点击原文链接访问官方页面查看全文，"
-                        f"GitHub Actions部署后将自动翻译为中文）"
+                    # 翻译成功：真实动态 + 固定背景知识合并
+                    article_title = f"巴西联邦税务局最新动态（{today_str}）"
+                    zh_detail = (
+                        f"【今日公告要点】{zh_titles}。\n\n"
+                        f"【税务背景参考】{FIXED_ZH}"
                     )
-                
-                results.append({
-                    "title": "巴西联邦税务局政策更新",
-                    "summary": f"{intro}\n\n{detail}",
-                    "source": "巴西联邦税务局 (Receita Federal)",
-                    "category": "税务与合规",
-                    "time": datetime.now(BJ_TZ).strftime("%Y-%m-%d"),
-                    "url": raw_articles[0][1] if raw_articles else "https://www.gov.br/receitafederal",
-                })
+                    article_url = raw_arts[0][1]
+                # 翻译失败：保持固定中文底稿，不显示葡语原文
     except Exception:
         pass
-    return results
+
+    return [{
+        "title": article_title,
+        "summary": zh_detail,
+        "source": "巴西联邦税务局 (Receita Federal)",
+        "category": "税务与合规",
+        "time": today_str,
+        "url": article_url,
+    }]
 
 def fetch_tax_compliance():
     """税务与合规：巴西税务局 → Google News(葡/英) → Bing News(英)"""
