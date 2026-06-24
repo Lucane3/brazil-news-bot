@@ -32,6 +32,10 @@ WECHAT_ENABLED = bool(WECHAT_APPID and WECHAT_APPSECRET)
 # Beijing timezone
 BJ_TZ = timezone(timedelta(hours=8))
 
+# 今日日期过滤字符串（格式 "YYYY-MM-DD"，在 main() 中赋值）
+# 用于 Google News after: 操作符，确保只抓当天新鲜新闻
+_TODAY_FILTER: str = ""
+
 # ===== 中文翻译模块 =====
 
 def _try_translate_google(text):
@@ -91,7 +95,7 @@ def parse_rss_date(date_str):
     """Parse RSS pubDate / standard date strings, return datetime in BJT"""
     if not date_str:
         return None
-    text = date_str.strip()[:25]
+    text = date_str.strip()  # 不截断，保留完整日期字符串以正确解析
     # RSS standard: "Mon, 22 Jun 2026 14:30:00 GMT"
     for fmt in [
         "%a, %d %b %Y %H:%M:%S %Z",
@@ -835,7 +839,7 @@ def _bing_news(query, hl="zh-Hans", max_items=5):
     return []
 
 def _news_chain(primary_func, gn_queries, bing_queries, category, max_items=3):
-    """通用新闻采集链路：主站 → Google News → Bing News，返回含分类标签的文章列表"""
+    """通用新闻采集链路：主站 → Google News（今日优先）→ Google News（无日期约束）→ Bing News"""
     # 1) Try primary source
     try:
         results = primary_func()
@@ -847,7 +851,18 @@ def _news_chain(primary_func, gn_queries, bing_queries, category, max_items=3):
             r.setdefault("category", category)
         return results
     
-    # 2) Try Google News (multiple queries until one works)
+    # 2) Google News with today-only filter（优先获取当天最新内容）
+    if _TODAY_FILTER:
+        for q, hl, gl in gn_queries:
+            q_today = f"{q} after:{_TODAY_FILTER}"
+            gn = _google_news(q_today, hl=hl, gl=gl, max_items=max_items)
+            if gn:
+                for r in gn:
+                    r["category"] = category
+                print(f"  [GN-TODAY] Got {len(gn)} articles for: {q}")
+                return gn
+    
+    # 3) Google News without date filter (fallback when today has no coverage yet)
     for q, hl, gl in gn_queries:
         gn = _google_news(q, hl=hl, gl=gl, max_items=max_items)
         if gn:
@@ -855,7 +870,7 @@ def _news_chain(primary_func, gn_queries, bing_queries, category, max_items=3):
                 r["category"] = category
             return gn
     
-    # 3) Try Bing News (multiple queries until one works)
+    # 4) Try Bing News (multiple queries until one works)
     for q, hl in bing_queries:
         bn = _bing_news(q, hl=hl, max_items=max_items)
         if bn:
@@ -885,17 +900,22 @@ def fetch_brazil_economy():
     )
 
 def _bcb_series(code):
-    """获取BCB单一指标最新值"""
+    """获取BCB单一指标最新值（含前值用于对比变动方向）"""
     url = f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.{code}/dados/ultimos/2?formato=json"
     text = _fetch(url, timeout=15)
     if text:
         try:
             data = json.loads(text)
             if data and len(data) > 0:
-                return data[0].get("valor", "").strip(), data[0].get("data", "")
+                latest = data[-1]   # 取最新值（列表末尾为最近一条）
+                prev = data[-2] if len(data) >= 2 else None
+                val = latest.get("valor", "").strip()
+                date_s = latest.get("data", "")
+                prev_val = prev.get("valor", "").strip() if prev else ""
+                return val, date_s, prev_val
         except (json.JSONDecodeError, Exception):
             pass
-    return "", ""
+    return "", "", ""
 
 def fetch_bcb_focus():
     """巴西央行宏观经济指标（BCB公开API，多维度真实数据，含中文解读）"""
@@ -922,9 +942,9 @@ def fetch_bcb_focus():
     # 批量获取所有指标
     data = {}
     for name, code, unit in indicators:
-        val, date_str = _bcb_series(code)
+        val, date_str, prev_val = _bcb_series(code)
         if val:
-            data[name] = {"valor": val, "data": date_str, "unit": unit}
+            data[name] = {"valor": val, "data": date_str, "unit": unit, "prev": prev_val}
     
     if not data:
         return results
@@ -965,7 +985,20 @@ def fetch_bcb_focus():
     trade_items = []
     if "美元/雷亚尔汇率(卖出)" in data:
         s = data["美元/雷亚尔汇率(卖出)"]
-        trade_items.append(f"美元兑雷亚尔汇率 {s['valor']}（{s['data']}），是影响巴西进出口价格竞争力及跨境投资回报率的核心变量")
+        val_str = s['valor']
+        change_note = ""
+        if s.get('prev'):
+            try:
+                curr_f = float(val_str.replace(",", "."))
+                prev_f = float(s['prev'].replace(",", "."))
+                diff = curr_f - prev_f
+                if abs(diff) > 0.0001:
+                    # 汇率升高 = 雷亚尔贬值
+                    arrow = "↑贬值" if diff > 0 else "↓升值"
+                    change_note = f"，较上次{arrow} {abs(diff):.4f}"
+            except Exception:
+                pass
+        trade_items.append(f"美元兑雷亚尔汇率 {val_str}{change_note}（{s['data']}），是影响巴西进出口价格竞争力及跨境投资回报率的核心变量")
     if "贸易顺差(月度)" in data:
         s = data["贸易顺差(月度)"]
         trade_items.append(f"月度贸易顺差 {s['valor']}百万美元（{s['data']}），体现巴西出口创汇能力与国际收支健康状况")
@@ -996,7 +1029,20 @@ def fetch_bcb_focus():
     market_items = []
     if "Ibovespa股指" in data:
         s = data["Ibovespa股指"]
-        market_items.append(f"Ibovespa圣保罗股指报 {s['valor']}点（{s['data']}），是拉丁美洲最重要的股票市场基准指数，涵盖巴西交易所最具流动性的蓝筹股")
+        val_str = s['valor']
+        change_note = ""
+        if s.get('prev'):
+            try:
+                curr_f = float(val_str.replace(",", "."))
+                prev_f = float(s['prev'].replace(",", "."))
+                diff = curr_f - prev_f
+                if abs(diff) > 0.1:
+                    pct = diff / prev_f * 100 if prev_f != 0 else 0
+                    arrow = "↑" if diff > 0 else "↓"
+                    change_note = f"，较前次{arrow}{abs(diff):.0f}点（{pct:+.2f}%）"
+            except Exception:
+                pass
+        market_items.append(f"Ibovespa圣保罗股指报 {val_str}点{change_note}（{s['data']}），是拉丁美洲最重要的股票市场基准指数，涵盖巴西交易所最具流动性的蓝筹股")
     if "工业生产指数(同比)" in data:
         s = data["工业生产指数(同比)"]
         market_items.append(f"工业生产同比变动 {s['valor']}%（{s['data']}），衡量制造业、采矿业和公用事业产出变化，是判断经济周期阶段的重要先行指标")
@@ -1192,35 +1238,20 @@ def fetch_chinese_community():
     )
 
 def _try_receita():
-    """税务与合规：无论网站可达与否、翻译成否，始终输出纯中文内容"""
+    """尝试从巴西税务局官网抓取当日真实新闻并翻译为中文。
+    翻译成功才返回；否则返回空列表，让链路交给 Google News 提供每日新鲜内容。"""
     today_str = datetime.now(BJ_TZ).strftime("%Y-%m-%d")
 
-    # 固定中文底稿——2025-2026年巴西税务核心要点，始终有实质内容
-    FIXED_ZH = (
-        "【税改进程】巴西税制改革（Reforma Tributária）正进入关键落地阶段：2025年起PIS/COFINS"
-        "并入CBS（联邦货物服务税），ICMS/ISS将逐步由IBS（州市货物服务税）替代，完整过渡期延至2033年。"
-        "在巴中资企业须持续跟进进项税抵扣规则变化及新版EFD申报系统操作要求。\n"
-        "【跨境电商】\"Remessa Conforme\"（合规汇款）项目持续运行：已在Receita Federal注册的境外平台，"
-        "单票低于USD 50的包裹适用统一20%综合税率（含ICMS），未注册平台货物仍需缴纳"
-        "进口税(II)+工业品税(IPI)+ICMS全额税负，存在清关延误风险，对华商直邮业务影响较大。\n"
-        "【电子发票】NF-e 4.0版本已全面推行，所有年营业额超过规定门槛的企业须完成系统升级；"
-        "NFS-e（服务类电子发票）标准化版本同步推广至各市，减少跨市销售的发票合规成本。"
-    )
-
-    article_url = "https://www.gov.br/receitafederal/pt-br/assuntos/noticias"
-    article_title = f"巴西税务合规动态（{today_str}）| 税改·跨境电商·NF-e"
-    zh_detail = FIXED_ZH
-
-    # 尝试从官网抓取真实新闻并翻译（仅翻译成功时才替换固定底稿）
     try:
         text = _fetch("https://www.gov.br/receitafederal/pt-br/assuntos/noticias", timeout=15)
         if text and len(text) > 500:
-            items = re.findall(r'(?:title|alt)="([^"]{15,120})"', text)
-            links = re.findall(r'href="(/receitafederal[^"]{10,})"', text)
+            items_found = re.findall(r'(?:title|alt)="([^"]{15,120})"', text)
+            links_found = re.findall(r'href="(/receitafederal[^"]{10,})"', text)
             seen_t = set()
             raw_arts = []
-            skip_kw = ["receita federal", "gov.br", "javascript", "toggle", "menu", "search", "buscar"]
-            for t, l in zip(items[:8], links[:8]):
+            skip_kw = ["receita federal", "gov.br", "javascript", "toggle", "menu",
+                       "search", "buscar", "acessibilidade", "governo"]
+            for t, l in zip(items_found[:10], links_found[:10]):
                 ct = _clean(t)
                 if ct and ct not in seen_t and len(ct) > 18:
                     if not any(kw in ct.lower() for kw in skip_kw):
@@ -1230,25 +1261,19 @@ def _try_receita():
                 titles_pt = "；".join([a[0] for a in raw_arts[:4]])
                 zh_titles = translate_to_chinese(titles_pt)
                 if is_chinese(zh_titles):
-                    # 翻译成功：真实动态 + 固定背景知识合并
-                    article_title = f"巴西联邦税务局最新动态（{today_str}）"
-                    zh_detail = (
-                        f"【今日公告要点】{zh_titles}。\n\n"
-                        f"【税务背景参考】{FIXED_ZH}"
-                    )
-                    article_url = raw_arts[0][1]
-                # 翻译失败：保持固定中文底稿，不显示葡语原文
+                    return [{
+                        "title": f"巴西联邦税务局今日公告（{today_str}）",
+                        "summary": zh_titles,
+                        "source": "巴西联邦税务局 (Receita Federal)",
+                        "category": "税务与合规",
+                        "time": today_str,
+                        "url": raw_arts[0][1],
+                    }]
     except Exception:
         pass
 
-    return [{
-        "title": article_title,
-        "summary": zh_detail,
-        "source": "巴西联邦税务局 (Receita Federal)",
-        "category": "税务与合规",
-        "time": today_str,
-        "url": article_url,
-    }]
+    # 官网不可达或翻译失败 → 返回空列表，交给 Google News 提供当天新鲜内容
+    return []
 
 def fetch_tax_compliance():
     """税务与合规：巴西税务局 → Google News(葡/英) → Bing News(英)"""
@@ -1278,6 +1303,11 @@ def main():
     bj_now = datetime.now(BJ_TZ)
     bj_today = bj_now.date()
     print(f"[TIME] {bj_now.strftime('%Y-%m-%d %H:%M:%S')} BJT  |  Filter date: {bj_today}")
+    
+    # 设置全局今日日期过滤（供 _news_chain 内 Google News after: 使用）
+    global _TODAY_FILTER
+    _TODAY_FILTER = bj_today.strftime("%Y-%m-%d")
+    print(f"[FILTER] Google News date constraint: after:{_TODAY_FILTER}")
     
     # Collect from all sources
     all_articles = []
