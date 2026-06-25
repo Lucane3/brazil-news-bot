@@ -27,10 +27,19 @@ jobs:
         id: dedup
         if: github.event_name == 'schedule'
         run: |
-          TODAY=$(date -u +%Y-%m-%d)
-          RUNS=$(gh api "repos/${{ github.repository }}/actions/runs?per_page=20" \
-            --jq "[.workflow_runs[] | select(.conclusion == \"success\" and (.created_at | startswith(\"$TODAY\")) and .event == \"schedule\")] | length" 2>/dev/null || echo "0")
-          echo "Today successful scheduled runs: $RUNS"
+          # 使用北京时间日期（UTC+8），避免UTC 23:30被误判为已发过
+          TODAY=$(TZ='Asia/Shanghai' date +%Y-%m-%d)
+          echo "Beijing today: $TODAY"
+          # 将北京日期转为UTC时间范围：当天00:00 BJ = 前一天16:00 UTC；当天23:59 BJ = 当天15:59 UTC
+          BJ_START="${TODAY}T00:00:00+08:00"
+          BJ_END="${TODAY}T23:59:59+08:00"
+          # 转换为UTC供过滤使用
+          START_UTC=$(date -d "$BJ_START" -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%S%z" "$BJ_START" -u +%Y-%m-%dT%H:%M:%SZ)
+          END_UTC=$(date -d "$BJ_END" -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%S%z" "$BJ_END" -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "UTC range: $START_UTC ~ $END_UTC"
+          RUNS=$(gh api "repos/${{ github.repository }}/actions/runs?per_page=30" \
+            --jq "[.workflow_runs[] | select(.conclusion == \"success\" and .event == \"schedule\") | select(.created_at >= \"$START_UTC\" and .created_at <= \"$END_UTC\")] | length" 2>/dev/null || echo "0")
+          echo "Beijing-day successful scheduled runs: $RUNS"
           if [ "$RUNS" -gt 0 ]; then
             echo "already_sent=true" >> $GITHUB_OUTPUT
           else
