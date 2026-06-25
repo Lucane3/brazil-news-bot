@@ -212,6 +212,91 @@ def build_html(articles, bj_now):
 </td></tr></table>
 </body></html>"""
 
+# ===== 公众号粘贴专用HTML生成器 =====
+
+def build_wechat_publish_html(articles, bj_now):
+    """生成可直接复制粘贴到微信公众号编辑器的HTML文件（与邮件格式完全一致）"""
+    date_str = bj_now.strftime("%Y年%m月%d日")
+    date_full = bj_now.strftime("%Y-%m-%d %H:%M")
+    
+    src_count = len(set(a["source"] for a in articles))
+    total = len(articles)
+    
+    cats = {}
+    for a in articles:
+        cat = a.get("category", "综合")
+        cats.setdefault(cat, []).append(a)
+    
+    items_html = ""
+    for cat, items in cats.items():
+        items_html += f'              <tr>\n                <td colspan="2" style="background: #009739; color: #ffffff; padding: 10px 16px; font-size: 15px; font-weight: bold; text-align: center; letter-spacing: 2px;">📌 {cat}</td>\n              </tr>\n'
+        for i, item in enumerate(items, 1):
+            url = item.get("url", "#")
+            display_title = item.get("title_zh") or item["title"]
+            display_summary = item.get("summary_zh") or item.get("summary", "")
+            bg_color = "#ffffff" if i % 2 == 1 else "#f8fff5"
+            items_html += f'''              <tr style="background: {bg_color};">
+                <td style="padding: 14px 16px; vertical-align: top; width: 28px; color: #009739; font-weight: bold; font-size: 16px;">{i}</td>
+                <td style="padding: 14px 16px;">
+                  <div style="font-size: 16px; font-weight: bold; color: #1a3a1a; margin-bottom: 6px; line-height: 1.5;">{display_title}</div>
+                  <div style="font-size: 12px; color: #888888; margin-bottom: 8px;">📡 {item['source']} &nbsp;|&nbsp; 🕐 {item.get('time','')}</div>
+                  <div style="font-size: 14px; color: #333333; line-height: 1.8; margin-bottom: 10px;">{display_summary}</div>
+                  <a href="{url}" target="_blank" style="display: inline-block; padding: 6px 18px; background: #009739; color: #ffffff; text-decoration: none; font-size: 13px; font-weight: bold;">📖 阅读原文 →</a>
+                </td>
+              </tr>
+'''
+    
+    return f'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>巴西资讯日报 - 公众号粘贴专用 | {date_str}</title>
+<style>
+  body {{ font-family: 'Microsoft YaHei', sans-serif; margin: 0; padding: 20px; background: #e8e8e8; }}
+  .preview-wrap {{ max-width: 680px; margin: 0 auto; }}
+</style>
+</head>
+<body>
+<div class="preview-wrap">
+<table width="100%" cellpadding="0" cellspacing="0" style="background: #f0f4f0; padding: 20px 0;">
+  <tr>
+    <td align="center">
+      <table width="680" cellpadding="0" cellspacing="0" style="background: #ffffff;">
+        <tr>
+          <td style="background: #009739; padding: 28px 30px; text-align: center;">
+            <div style="font-size: 12px; color: #a3e6b3; letter-spacing: 2px;">每日巴西财经简报</div>
+            <div style="font-size: 26px; font-weight: bold; color: #ffffff; margin: 6px 0;">巴西资讯日报</div>
+            <div style="font-size: 14px; color: #d4f5db;">{date_str}</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 20px 24px; background: #eaf7ed; font-size: 13px; color: #333366;">
+            当日共采集 <b>{total}</b> 条资讯，覆盖 <b>{src_count}</b> 个信息源 &nbsp;|&nbsp; 生成时间 {date_full}（北京时间）<br>
+            🌐 <a href="https://lucane3.github.io/brazil-news-bot/" target="_blank" style="color: #009739; font-weight: bold;">国内直连查看完整日报 →</a>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 4px 0;">
+            <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse;">
+{items_html}
+            </table>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 16px 24px; text-align: center; font-size: 11px; color: #aaaaaa; border-top: 1px solid #e8e8e8;">
+            巴西资讯日报 · 自动生成 | 信息源：Google News / BCB巴西央行 / IBGE统计局 / 新华网 / 南美侨报网 / 巴西联邦税务局
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+</div>
+</body>
+</html>'''
+
+
 # ===== GitHub Pages 国内可访问页面 =====
 
 def build_github_page(articles, bj_now):
@@ -1379,11 +1464,28 @@ def main():
     # Build Word document
     print("[DOCX] Generating Word attachment...")
     doc = build_docx(deduped, bj_now)
-    tmp_path = os.path.join(tempfile.gettempdir(), f"brazil_news_{bj_now.strftime('%Y%m%d')}.docx")
-    doc.save(tmp_path)
-    print(f"[DOCX] Saved -> {tmp_path}")
+    tmp_docx = os.path.join(tempfile.gettempdir(), f"brazil_news_{bj_now.strftime('%Y%m%d')}.docx")
+    doc.save(tmp_docx)
+    print(f"[DOCX] Saved -> {tmp_docx}")
     
-    # Build email with both HTML body and DOCX attachment
+    # Build WeChat publish HTML
+    print("[HTML] Generating WeChat publish HTML...")
+    wechat_html = build_wechat_publish_html(deduped, bj_now)
+    tmp_html = os.path.join(tempfile.gettempdir(), f"wechat_publish_{bj_now.strftime('%Y%m%d')}.html")
+    with open(tmp_html, "w", encoding="utf-8") as f:
+        f.write(wechat_html)
+    print(f"[HTML] Saved -> {tmp_html}")
+    
+    # Locate cover image
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    cover_path = os.path.join(script_dir, "cover.png")
+    cover_exists = os.path.exists(cover_path)
+    if cover_exists:
+        print(f"[COVER] Found cover image: {cover_path}")
+    else:
+        print("[COVER] WARN: cover.png not found, will skip cover attachment")
+    
+    # Build email with HTML body + 3 attachments (DOCX + Cover PNG + WeChat HTML)
     docx_filename = f"巴西资讯日报_{bj_now.strftime('%Y%m%d')}.docx"
     
     msg = EmailMessage()
@@ -1392,11 +1494,11 @@ def main():
     msg["Subject"] = f"巴西资讯日报 | {bj_now.strftime('%Y-%m-%d')}"
     
     # Plain text + HTML alternative content
-    msg.set_content("巴西资讯日报 - 请使用支持HTML的邮件客户端查看。Word文档见附件。")
+    msg.set_content("巴西资讯日报 - 请使用支持HTML的邮件客户端查看。\n附件：Word文档、公众号HTML文件、封面图片。")
     msg.add_alternative(html, subtype="html")
     
-    # Attach Word document — EmailMessage handles filename encoding automatically
-    with open(tmp_path, "rb") as f:
+    # Attach Word document
+    with open(tmp_docx, "rb") as f:
         docx_data = f.read()
     msg.add_attachment(
         docx_data,
@@ -1404,6 +1506,29 @@ def main():
         subtype="vnd.openxmlformats-officedocument.wordprocessingml.document",
         filename=docx_filename,
     )
+    
+    # Attach WeChat publish HTML
+    html_filename = f"公众号粘贴_{bj_now.strftime('%Y%m%d')}.html"
+    with open(tmp_html, "rb") as f:
+        html_data = f.read()
+    msg.add_attachment(
+        html_data,
+        maintype="text",
+        subtype="html",
+        filename=html_filename,
+    )
+    
+    # Attach cover image
+    if cover_exists:
+        with open(cover_path, "rb") as f:
+            cover_data = f.read()
+        msg.add_attachment(
+            cover_data,
+            maintype="image",
+            subtype="png",
+            filename="巴西资讯日报_封面.png",
+        )
+        print("[COVER] Cover image attached to email")
     
     print("[SEND] Connecting to QQ SMTP...")
     try:
@@ -1419,11 +1544,12 @@ def main():
     # === WeChat auto-publish (optional) ===
     wechat_publish(deduped, bj_now)
     
-    # Clean up temp file
-    try:
-        os.remove(tmp_path)
-    except OSError:
-        pass
+    # Clean up temp files
+    for tmp_file in [tmp_docx, tmp_html]:
+        try:
+            os.remove(tmp_file)
+        except OSError:
+            pass
     
     print("[DONE] === Complete ===")
 
