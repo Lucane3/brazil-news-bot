@@ -215,7 +215,10 @@ def build_html(articles, bj_now):
 # ===== 公众号粘贴专用HTML生成器 =====
 
 def build_wechat_publish_html(articles, bj_now):
-    """生成可直接复制粘贴到微信公众号编辑器的HTML文件（与邮件格式完全一致）"""
+    """生成可直接复制粘贴到微信公众号编辑器的HTML文件
+    - 提供"一键复制HTML源码"按钮（JS复制innerHTML，公众号源码模式粘贴后链接完整保留）
+    - 每条资讯额外显示可选中的纯文本URL，双重保障超链接可复制
+    """
     date_str = bj_now.strftime("%Y年%m月%d日")
     date_full = bj_now.strftime("%Y-%m-%d %H:%M")
     
@@ -235,6 +238,8 @@ def build_wechat_publish_html(articles, bj_now):
             display_title = item.get("title_zh") or item["title"]
             display_summary = item.get("summary_zh") or item.get("summary", "")
             bg_color = "#ffffff" if i % 2 == 1 else "#f8fff5"
+            # 截短URL用于显示（过长则截断+省略号，完整URL仍在href和title中）
+            url_display = url if len(url) <= 80 else url[:77] + "..."
             items_html += f'''              <tr style="background: {bg_color};">
                 <td style="padding: 14px 16px; vertical-align: top; width: 28px; color: #009739; font-weight: bold; font-size: 16px;">{i}</td>
                 <td style="padding: 14px 16px;">
@@ -242,6 +247,7 @@ def build_wechat_publish_html(articles, bj_now):
                   <div style="font-size: 12px; color: #888888; margin-bottom: 8px;">📡 {item['source']} &nbsp;|&nbsp; 🕐 {item.get('time','')}</div>
                   <div style="font-size: 14px; color: #333333; line-height: 1.8; margin-bottom: 10px;">{display_summary}</div>
                   <a href="{url}" target="_blank" style="display: inline-block; padding: 6px 18px; background: #009739; color: #ffffff; text-decoration: none; font-size: 13px; font-weight: bold;">📖 阅读原文 →</a>
+                  <div style="margin-top: 6px; font-size: 11px; color: #009739; word-break: break-all; line-height: 1.5;">🔗 <a href="{url}" target="_blank" style="color: #009739; text-decoration: underline;" title="{url}">{url_display}</a></div>
                 </td>
               </tr>
 '''
@@ -254,11 +260,33 @@ def build_wechat_publish_html(articles, bj_now):
 <title>巴西资讯日报 - 公众号粘贴专用 | {date_str}</title>
 <style>
   body {{ font-family: 'Microsoft YaHei', sans-serif; margin: 0; padding: 20px; background: #e8e8e8; }}
-  .preview-wrap {{ max-width: 680px; margin: 0 auto; }}
+  .preview-wrap {{ max-width: 720px; margin: 0 auto; }}
+  .toolbar {{ background: #fff; border-radius: 8px; padding: 16px 20px; margin-bottom: 16px; box-shadow: 0 2px 10px rgba(0,0,0,0.10); }}
+  .toolbar h3 {{ margin: 0 0 10px 0; font-size: 15px; color: #1a3a1a; }}
+  .btn-copy {{ display: inline-block; padding: 10px 26px; background: #009739; color: #fff; border: none; border-radius: 6px; font-size: 14px; font-weight: bold; cursor: pointer; margin-right: 12px; }}
+  .btn-copy:hover {{ background: #007a2e; }}
+  .copy-ok {{ display: none; color: #009739; font-weight: bold; font-size: 14px; vertical-align: middle; }}
+  .tips {{ margin-top: 10px; font-size: 12px; color: #666; line-height: 1.8; background: #f6fff6; border-left: 3px solid #009739; padding: 8px 12px; border-radius: 0 4px 4px 0; }}
+  .tips b {{ color: #009739; }}
 </style>
 </head>
 <body>
 <div class="preview-wrap">
+
+<!-- ===== 工具栏（不会被复制进公众号） ===== -->
+<div class="toolbar">
+  <h3>📋 公众号一键复制工具</h3>
+  <button class="btn-copy" onclick="copyArticleHtml()">📋 一键复制 HTML 源码</button>
+  <span class="copy-ok" id="copyOk">✅ 已复制！去公众号编辑器粘贴</span>
+  <div class="tips">
+    <b>超链接保留方法（推荐）：</b><br>
+    ① 点击上方按钮复制 → ② 打开微信公众号编辑器 → ③ 点工具栏 <b>「&lt;/&gt; 源代码」</b> 按钮 → ④ <b>Ctrl+A 全选</b>已有内容后 <b>Ctrl+V 粘贴</b> → ⑤ 点确定，链接即可完整保留<br><br>
+    <b>备用方法：</b>每条资讯下方绿色文字即为可见URL，可直接复制链接地址。
+  </div>
+</div>
+
+<!-- ===== 公众号正文区（id=article-body，JS复制此处innerHTML） ===== -->
+<div id="article-body">
 <table width="100%" cellpadding="0" cellspacing="0" style="background: #f0f4f0; padding: 20px 0;">
   <tr>
     <td align="center">
@@ -292,7 +320,36 @@ def build_wechat_publish_html(articles, bj_now):
     </td>
   </tr>
 </table>
-</div>
+</div><!-- end article-body -->
+
+</div><!-- end preview-wrap -->
+
+<script>
+function copyArticleHtml() {{
+  var html = document.getElementById('article-body').innerHTML;
+  if (navigator.clipboard && navigator.clipboard.writeText) {{
+    navigator.clipboard.writeText(html).then(function() {{
+      showCopyOk();
+    }}).catch(function() {{ fallbackCopy(html); }});
+  }} else {{
+    fallbackCopy(html);
+  }}
+}}
+function fallbackCopy(text) {{
+  var ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;';
+  document.body.appendChild(ta);
+  ta.focus(); ta.select();
+  try {{ document.execCommand('copy'); showCopyOk(); }} catch(e) {{ alert('复制失败，请手动选中内容后按Ctrl+C'); }}
+  document.body.removeChild(ta);
+}}
+function showCopyOk() {{
+  var el = document.getElementById('copyOk');
+  el.style.display = 'inline';
+  setTimeout(function() {{ el.style.display = 'none'; }}, 4000);
+}}
+</script>
 </body>
 </html>'''
 
