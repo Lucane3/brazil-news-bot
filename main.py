@@ -805,6 +805,40 @@ def _clean(text):
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
+def _clean_gn_description(desc_html):
+    """解析Google News RSS描述HTML，提取文章标题+来源，格式化为可读文本。
+    Google News description格式: <ol><li><a href="...">Title</a><font>Source</font></li>...</ol>
+    避免清洗后变成 "Title1 来源1 Title2 来源2" 纯字符串（用户误以为是作者信息）。
+    """
+    if not desc_html or len(desc_html.strip()) < 10:
+        return ""
+    # 先进行HTML实体解码，处理 &lt; &gt; 等
+    unescaped = _html.unescape(desc_html)
+    # 提取 <a>Title</a>...<font>Source</font> 对
+    pairs = re.findall(
+        r'<a[^>]*>([^<]{8,200})</a>[^<]*<font[^>]*>([^<]{2,60})</font>',
+        unescaped, re.IGNORECASE
+    )
+    if pairs:
+        lines = []
+        for title_raw, source_raw in pairs[:4]:
+            ct = _clean(title_raw).strip()
+            cs = _clean(source_raw).strip()
+            if ct:
+                lines.append(f"➤ {ct}（{cs}）" if cs else f"➤ {ct}")
+        if lines:
+            return "\n".join(lines)
+    # 兜底：仅提取所有 <a> 标签文字，忽略单独的来源名
+    a_texts = re.findall(r'<a[^>]*>([^<]{8,200})</a>', unescaped, re.IGNORECASE)
+    if a_texts:
+        cleaned = [_clean(t).strip() for t in a_texts[:4]]
+        cleaned = [t for t in cleaned if len(t) > 10]
+        if cleaned:
+            return "\n".join(f"➤ {t}" for t in cleaned)
+    # 最终兜底
+    return _clean(desc_html)[:400]
+
+
 def _parse_rss_items(xml_text, max_items=5):
     """Parse RSS XML items into article dicts. Returns empty list if no valid items."""
     if not xml_text or "<item>" not in xml_text:
@@ -824,8 +858,21 @@ def _parse_rss_items(xml_text, max_items=5):
         if not title or not link:
             continue
         
+        # 过滤链接指向图片/媒体文件的条目（这类链接阅读原文会跳到一张图）
+        if re.search(r'\.(jpg|jpeg|png|gif|webp|mp4|mp3)(\?[^"]*)?$', link, re.I):
+            continue
+        
         clean_title = _clean(title)
-        clean_desc = _clean(desc)[:500] if desc else clean_title
+        
+        # 用专用解析器处理 Google News 描述（含HTML格式 <a>Title</a><font>Source</font>）
+        if desc and ("<a " in desc or "&lt;a " in desc or "&#60;a " in desc):
+            clean_desc = _clean_gn_description(desc)
+        else:
+            clean_desc = _clean(desc)[:400] if desc else ""
+        
+        # 如果描述过短或与标题相同，用标题补充
+        if not clean_desc or len(clean_desc.strip()) < 15:
+            clean_desc = clean_title
         
         # Google News format: "Actual Title - Source Name"
         display_source = src_name or "Google News"
@@ -1324,38 +1371,86 @@ def fetch_chinese_community():
 
 def _try_receita():
     """尝试从巴西税务局官网抓取当日真实新闻并翻译为中文。
-    翻译成功才返回；否则返回空列表，让链路交给 Google News 提供每日新鲜内容。"""
+    修复了旧版 zip 错位导致标题配到图片链接的问题：
+    新版从同一 <a> 标签同时提取 href 和锚点文本，保证配对正确。
+    翻译成功才返回；否则返回空列表，交给 Google News 提供新鲜内容。
+    """
     today_str = datetime.now(BJ_TZ).strftime("%Y-%m-%d")
 
     try:
         text = _fetch("https://www.gov.br/receitafederal/pt-br/assuntos/noticias", timeout=15)
-        if text and len(text) > 500:
-            items_found = re.findall(r'(?:title|alt)="([^"]{15,120})"', text)
-            links_found = re.findall(r'href="(/receitafederal[^"]{10,})"', text)
-            seen_t = set()
-            raw_arts = []
-            skip_kw = ["receita federal", "gov.br", "javascript", "toggle", "menu",
-                       "search", "buscar", "acessibilidade", "governo"]
-            for t, l in zip(items_found[:10], links_found[:10]):
-                ct = _clean(t)
-                if ct and ct not in seen_t and len(ct) > 18:
+        if not text or len(text) < 500:
+            return []
+
+        skip_kw = ["logo", "ícone", "imagem", "clique aqui", "acesse", "voltar",
+                   "buscar", "menu", "javascript", "download", "ver mais",
+                   "gov.br", "home", "início", "receita federal do brasil",
+                   "ministério", "acessibilidade"]
+
+        # ── 方法1：从同一 <a> 标签同时提取 href + 锚点文本（无 zip 错位风险）──
+        # gov.br Plone CMS 新闻文章URL格式:
+        #   /receitafederal/pt-br/assuntos/noticias/YYYY/month/article-slug
+        news_articles = re.findall(
+            r'<a[^>]+href="(/receitafederal/pt-br/assuntos/noticias/\d{4}/[^"#?\s]{5,})"[^>]*>'
+            r'\s*([^<]{15,120})\s*</a>',
+            text, re.IGNORECASE
+        )
+
+        seen_links = set()
+        raw_arts = []
+        for link, title_html in news_articles:
+            # 过滤图片/媒体/样式/脚本文件（之前漏洞的根源：这类URL被错配给图片alt文本）
+            if re.search(r'\.(jpg|jpeg|png|gif|webp|pdf|css|js|ico|svg)(\?.*)?$', link, re.I):
+                continue
+            ct = _clean(title_html).strip()
+            full_link = "https://www.gov.br" + link
+            if ct and len(ct) > 18 and full_link not in seen_links:
+                if not any(kw in ct.lower() for kw in skip_kw):
+                    seen_links.add(full_link)
+                    raw_arts.append((ct, full_link))
+                    if len(raw_arts) >= 4:
+                        break
+
+        # ── 方法2兜底：h2/h3 标题 + 新闻年份路径URL（独立提取，不依赖zip顺序）──
+        if not raw_arts:
+            headings = re.findall(r'<h[234][^>]*>([^<]{18,120})</h[234]>', text, re.IGNORECASE)
+            all_news_links = re.findall(
+                r'href="((?:https?://www\.gov\.br)?/receitafederal/pt-br/assuntos/noticias/\d{4}/[^"#?\s]{5,})"',
+                text, re.IGNORECASE
+            )
+            # 去重并过滤非文章URL
+            unique_links, seen_l = [], set()
+            for l in all_news_links:
+                full = ("https://www.gov.br" + l) if l.startswith("/") else l
+                if full not in seen_l and not re.search(r'\.(jpg|png|gif|pdf|css|js)(\?.*)?$', full, re.I):
+                    seen_l.add(full)
+                    unique_links.append(full)
+
+            seen = set()
+            for t, l in zip(headings[:5], unique_links[:5]):
+                ct = _clean(t).strip()
+                if ct and len(ct) > 18 and l not in seen:
                     if not any(kw in ct.lower() for kw in skip_kw):
-                        seen_t.add(ct)
-                        raw_arts.append((ct, "https://www.gov.br" + l if l.startswith("/") else l))
-            if raw_arts:
-                titles_pt = "；".join([a[0] for a in raw_arts[:4]])
-                zh_titles = translate_to_chinese(titles_pt)
-                if is_chinese(zh_titles):
-                    return [{
-                        "title": f"巴西联邦税务局今日公告（{today_str}）",
-                        "summary": zh_titles,
-                        "source": "巴西联邦税务局 (Receita Federal)",
-                        "category": "税务与合规",
-                        "time": today_str,
-                        "url": raw_arts[0][1],
-                    }]
-    except Exception:
-        pass
+                        seen.add(l)
+                        raw_arts.append((ct, l))
+
+        if not raw_arts:
+            return []
+
+        # 翻译为中文
+        titles_pt = "；".join([a[0] for a in raw_arts[:4]])
+        zh_titles = translate_to_chinese(titles_pt)
+        if is_chinese(zh_titles):
+            return [{
+                "title": f"巴西联邦税务局最新公告（{today_str}）",
+                "summary": zh_titles,
+                "source": "巴西联邦税务局 (Receita Federal)",
+                "category": "税务与合规",
+                "time": today_str,
+                "url": raw_arts[0][1],
+            }]
+    except Exception as e:
+        print(f"  [WARN] _try_receita error: {e}")
 
     # 官网不可达或翻译失败 → 返回空列表，交给 Google News 提供当天新鲜内容
     return []
